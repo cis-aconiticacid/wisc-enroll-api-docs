@@ -1,0 +1,414 @@
+openapi: 3.1.0
+info:
+  title: public.enroll.wisc.edu Search API (reverse-engineered)
+  version: "v1"
+  summary: UW-Madison course enrollment search API — undocumented by the registrar.
+  description: |
+    Reverse-engineered from the minified frontend bundle
+    (`chunk-PJYL2HPO.js`) and confirmed via DevTools network traces.
+    There is no official specification. Field names and behaviors can
+    change without notice. See the accompanying Markdown files in this
+    folder for full behavior analysis.
+  contact:
+    name: Project README
+    url: https://github.com/
+  license:
+    name: Documentation only — API is property of UW-Madison
+servers:
+  - url: https://public.enroll.wisc.edu
+    description: Production
+
+tags:
+  - name: search
+  - name: reference
+  - name: course
+
+paths:
+
+  /api/search/v1:
+    post:
+      tags: [search]
+      summary: Course search
+      description: |
+        Accepts an Elasticsearch-shaped query body and returns a page of
+        matching `CourseHit` objects. See `02-search-request.md` for the
+        full body contract.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchRequest"
+            examples:
+              matchAllSpring2026:
+                summary: Match-all for Spring 2026
+                value:
+                  selectedTerm: "1264"
+                  queryString: "*"
+                  filters: []
+                  page: 1
+                  pageSize: 50
+                  sortOrder: "SCORE"
+      responses:
+        "200":
+          description: Paginated results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+        "400":
+          description: Malformed body
+        "403":
+          description: Blocked — non-browser headers
+        "500":
+          description: Upstream ES error (usually a malformed filter clause)
+
+  /api/search/v1/aggregate:
+    get:
+      tags: [reference]
+      summary: Reference data bootstrap
+      description: Terms, per-term sessions, per-term subjects, specialGroups.
+      responses:
+        "200":
+          description: Aggregate payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Aggregate"
+
+  /api/search/v1/subjectsMap/{termCode}:
+    get:
+      tags: [reference]
+      summary: Subjects available in a term
+      parameters:
+        - $ref: "#/components/parameters/TermCode"
+      responses:
+        "200":
+          description: "{subjectCode: Subject}"
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  $ref: "#/components/schemas/Subject"
+
+  /api/search/v1/enrollmentPackages/{termCode}/{subjectCode}/{courseId}:
+    get:
+      tags: [course]
+      summary: Sections / enrollment packages for one course
+      parameters:
+        - $ref: "#/components/parameters/TermCodeReal"
+        - $ref: "#/components/parameters/SubjectCode"
+        - $ref: "#/components/parameters/CourseId"
+      responses:
+        "200":
+          description: List of enrollment packages
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/EnrollmentPackage"
+        "404":
+          description: Course not offered in that term, or path-segment mismatch
+
+  /api/search/v1/details/{termCode}/{subjectCode}/{courseId}:
+    get:
+      tags: [course]
+      summary: Full course details
+      parameters:
+        - $ref: "#/components/parameters/TermCodeReal"
+        - $ref: "#/components/parameters/SubjectCode"
+        - $ref: "#/components/parameters/CourseId"
+      responses:
+        "200":
+          description: Course details payload (may be a single object or 1-element array)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/Details"
+                  - type: array
+                    items:
+                      $ref: "#/components/schemas/Details"
+
+components:
+
+  parameters:
+
+    TermCode:
+      name: termCode
+      in: path
+      required: true
+      description: "Term code (e.g. `1264`). Use `0000` for union across all terms."
+      schema:
+        type: string
+        pattern: "^[0-9]{4}$"
+
+    TermCodeReal:
+      name: termCode
+      in: path
+      required: true
+      description: "Real term code (e.g. `1264`). `0000` is not valid here."
+      schema:
+        type: string
+        pattern: "^[0-9]{4}$"
+
+    SubjectCode:
+      name: subjectCode
+      in: path
+      required: true
+      description: "**Numeric** subject code (e.g. `600`). Not the abbreviation."
+      schema:
+        type: string
+
+    CourseId:
+      name: courseId
+      in: path
+      required: true
+      description: "Zero-padded 6-char course identifier (e.g. `019342`)."
+      schema:
+        type: string
+
+  schemas:
+
+    # ── Request ──
+
+    SearchRequest:
+      type: object
+      required: [selectedTerm, queryString, filters, page, pageSize, sortOrder]
+      properties:
+        selectedTerm:
+          type: string
+          description: Term code; `"0000"` = all terms.
+        queryString:
+          type: string
+          description: Full-text query. Use `"*"` for match-all.
+        filters:
+          type: array
+          description: Array of Elasticsearch clauses (see 03-filters-reference.md).
+          items:
+            type: object
+        page:
+          type: integer
+          minimum: 1
+        pageSize:
+          type: integer
+          maximum: 50
+          description: Values > 50 are silently clamped.
+        sortOrder:
+          type: string
+          enum: [SCORE, SUBJECT, CATALOG_NUMBER]
+
+    # ── Response envelope ──
+
+    SearchResponse:
+      type: object
+      required: [found, hits, success]
+      properties:
+        found:
+          type: integer
+          description: Total matching courses across all pages.
+        hits:
+          type: array
+          items:
+            $ref: "#/components/schemas/CourseHit"
+        message:
+          type: [string, "null"]
+        success:
+          type: boolean
+
+    # ── Entity: CourseHit ──
+
+    CourseHit:
+      type: object
+      description: |
+        Hit returned by the search endpoint. 45 fields observed — only
+        the most important ones are listed here. See
+        04-response-schemas.md for the full list.
+      properties:
+        termCode:      { type: string }
+        courseId:      { type: string }
+        subject:       { $ref: "#/components/schemas/Subject" }
+        catalogNumber: { type: string }
+        catalogSort:   { type: string, description: "Zero-padded, 5 chars" }
+        title:         { type: string }
+        description:   { type: string }
+        minimumCredits:{ type: number }
+        maximumCredits:{ type: number }
+        creditRange:   { type: string }
+        firstTaught:   { type: string }
+        lastTaught:    { type: string }
+        typicallyOffered: { type: string }
+        currentlyTaught:  { type: boolean }
+        coreGeneralEducation: { type: boolean }
+        generalEd: { type: array, items: { $ref: "#/components/schemas/CodedValue" } }
+        ethnicStudies: { $ref: "#/components/schemas/CodedValue" }
+        breadths:  { type: array, items: { $ref: "#/components/schemas/CodedValue" } }
+        levels:    { type: array, items: { $ref: "#/components/schemas/CodedValue" } }
+        foreignLanguage: { $ref: "#/components/schemas/CodedValue" }
+        honors:          { $ref: "#/components/schemas/CodedValue" }
+        lettersAndScienceCredits: { $ref: "#/components/schemas/CodedValue" }
+        courseDesignation:        { type: string }
+        courseDesignationRaw:     { type: string }
+        fullCourseDesignation:    { type: string }
+        fullCourseDesignationRaw: { type: string }
+        courseRequirements:       { type: object, additionalProperties: true }
+        advisoryPrerequisites:    { type: string }
+        enrollmentPrerequisites:  { type: string }
+        approvedForTopics: { type: boolean }
+        topics: { type: array, items: { type: object, properties: { id: { type: integer }, name: { type: string } } } }
+        allCrossListedSubjects: { type: array, items: { $ref: "#/components/schemas/Subject" } }
+        catalogPrintFlag:   { type: string }
+        academicGroupCode:  { type: string }
+        gradingBasis:       { $ref: "#/components/schemas/CodedValue" }
+        repeatable:         { type: string, enum: ["Y","N"] }
+        gradCourseWork:     { type: boolean }
+        openToFirstYear:    { type: boolean }
+        instructorProvidedContent: { type: object, additionalProperties: true }
+        subjectAggregate:   { type: object, additionalProperties: true }
+        lastUpdated:        { type: integer, description: "epoch millis" }
+        matched_queries:    { type: array, items: { type: string } }
+
+    # ── Subject ──
+
+    Subject:
+      type: object
+      properties:
+        termCode:          { type: string }
+        subjectCode:       { type: string, description: "Numeric, e.g. `600`" }
+        description:       { type: string }
+        shortDescription:  { type: string, description: "UI label, e.g. `MATH`" }
+        formalDescription: { type: string }
+        undergraduateCatalogURI: { type: string }
+        graduateCatalogURI:      { type: string }
+        departmentURI:           { type: string }
+        schoolCollege: { type: object, additionalProperties: true }
+        footnotes:     { type: array, items: { type: string } }
+        departmentOwnerAcademicOrgCode: { type: string }
+
+    # ── Helper: coded value ──
+
+    CodedValue:
+      type: object
+      properties:
+        code:        { type: string }
+        description: { type: string }
+
+    # ── EnrollmentPackage ──
+
+    EnrollmentPackage:
+      type: object
+      properties:
+        packageEnrollmentStatus:
+          type: object
+          properties:
+            status: { type: string, enum: [OPEN, WAITLISTED, CLOSED] }
+            availableSeats:    { type: integer }
+            waitlistTotal:     { type: integer }
+            currentlyEnrolled: { type: integer }
+        classMeetings:
+          type: array
+          items: { type: object, additionalProperties: true }
+        sections:
+          type: array
+          items: { $ref: "#/components/schemas/Section" }
+        published:          { type: boolean }
+        modesOfInstruction: { type: array, items: { type: string } }
+        isAsynchronous:     { type: boolean }
+
+    Section:
+      type: object
+      properties:
+        type:          { type: string, description: "LEC | DIS | LAB | SEM | …" }
+        sectionNumber: { type: string }
+        classNumber:   { type: integer }
+        honors:        { type: [string, "null"], enum: [HONORS_ONLY, HONORS_LEVEL, INSTRUCTOR_APPROVED, null] }
+        comB:          { type: boolean }
+        sessionCode:   { type: string }
+        classAttributes:
+          type: array
+          items:
+            type: object
+            properties:
+              attributeCode: { type: string }
+              valueCode:     { type: string }
+        instructor:
+          type: object
+          properties:
+            name: { type: string }
+            pvi:  { type: string }
+
+    # ── Details ──
+
+    Details:
+      allOf:
+        - $ref: "#/components/schemas/CourseHit"
+        - type: object
+          properties:
+            crossListedSubjects:
+              type: array
+              items: { $ref: "#/components/schemas/Subject" }
+            catalogURIs:
+              type: object
+              properties:
+                undergraduate: { type: string }
+                graduate:      { type: string }
+            footnotes:
+              type: array
+              items:
+                type: object
+                properties:
+                  id:   { type: string }
+                  text: { type: string }
+
+    # ── Aggregate ──
+
+    Aggregate:
+      type: object
+      properties:
+        terms:
+          type: array
+          items: { $ref: "#/components/schemas/Term" }
+        sessions:
+          type: array
+          items:
+            type: object
+            properties:
+              termCode: { type: string }
+              sessions:
+                type: array
+                items: { $ref: "#/components/schemas/Session" }
+        subjects:
+          type: object
+          description: "termCode → Subject[] (`0000` = union across all terms)"
+          additionalProperties:
+            type: array
+            items: { $ref: "#/components/schemas/Subject" }
+        specialGroups:
+          type: array
+          items:
+            type: array
+            items:
+              type: object
+              properties:
+                groupCode:        { type: string }
+                groupDescription: { type: string }
+
+    Term:
+      type: object
+      properties:
+        termCode:         { type: string }
+        shortDescription: { type: string }
+        longDescription:  { type: string }
+        beginDate:        { type: string, format: date }
+        endDate:          { type: string, format: date }
+        pastTerm:         { type: boolean }
+
+    Session:
+      type: object
+      properties:
+        sessionCode:        { type: string }
+        sessionDescription: { type: string }
+        beginDate:          { type: string, format: date }
+        endDate:            { type: string, format: date }
