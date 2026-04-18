@@ -10,6 +10,8 @@ reading the minified frontend bundle (`chunk-PJYL2HPO.js`) and confirming
 each path against live DevTools network traffic. There is **no official
 public specification** published by UW-Madison for this API.
 
+To the extent that any copyright subsists in this documentation, it is released under CC0 1.0 Universal (Public Domain Dedication). The underlying API structure, field names, and behaviors are factual observations of a publicly accessible system and are not claimed as original authorship.
+
 ## Status
 
 - **Base URL:** `https://public.enroll.wisc.edu`
